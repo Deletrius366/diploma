@@ -94,7 +94,6 @@ Solver::Solver() :
   , clause_decay     (opt_clause_decay)
   , random_var_freq  (opt_random_var_freq)
   , random_seed      (opt_random_seed)
-  , VSIDS            (false)
   , ccmin_mode       (opt_ccmin_mode)
   , phase_saving     (opt_phase_saving)
   , rnd_pol          (false)
@@ -119,7 +118,7 @@ Solver::Solver() :
 
   // Statistics: (formerly in 'SolverStats')
   //
-  , solves(0), starts(0), decisions(0), rnd_decisions(0), propagations(0), conflicts(0), conflicts_VSIDS(0)
+  , solves(0), starts(0), decisions(0), rnd_decisions(0), propagations(0), conflicts(0), conflicts_VSIDS(0), conflicts_CHB(0)
   , dec_vars(0), clauses_literals(0), learnts_literals(0), max_literals(0), tot_literals(0)
   , chrono_backtrack(0), non_chrono_backtrack(0)
 
@@ -131,17 +130,19 @@ Solver::Solver() :
   , qhead              (0)
   , simpDB_assigns     (-1)
   , simpDB_props       (0)
-  , order_heap_CHB     (VarOrderLt(activity_CHB))
+  , order_heap_LRB     (VarOrderLt(activity_LRB))
   , order_heap_VSIDS   (VarOrderLt(activity_VSIDS))
-  , order_heap_real_CHB(VarOrderLt(activity_real_CHB))
+  , order_heap_CHB(VarOrderLt(activity_CHB))
   , progress_estimate  (0)
   , remove_satisfied   (true)
   
   , action             (0)
 
   , core_lbd_cut       (2)
-  , global_lbd_sum     (0)
-  , lbd_queue          (50)
+  , global_lbd_sum_VSIDS (0)
+  , global_lbd_sum_CHB (0)
+  , lbd_queue_VSIDS    (50)
+  , lbd_queue_CHB      (50)
   , next_T2_reduce     (10000)
   , next_L_reduce      (15000)
   , confl_to_chrono    (opt_conf_to_chrono)
@@ -927,8 +928,8 @@ Var Solver::newVar(bool sign, bool dvar)
     watches  .init(mkLit(v, true ));
     assigns  .push(l_Undef);
     vardata  .push(mkVarData(CRef_Undef, 0));
+    activity_LRB  .push(0);
     activity_CHB  .push(0);
-    activity_real_CHB  .push(0);
     activity_VSIDS.push(rnd_init_act ? drand(random_seed) * 0.00001 : 0);
 
     picked.push(0);
@@ -1081,7 +1082,7 @@ void Solver::cancelUntil(int bLevel) {
 			}
 			else
 			{
-				 if (!VSIDS){
+				 if (heuristic_num == LRB){
 					uint32_t age = conflicts - picked[x];
 					if (age > 0){
 						double adjusted_reward = ((double) (conflicted[x] + almost_conflicted[x])) / ((double) age);
@@ -1128,8 +1129,9 @@ void Solver::cancelUntil(int bLevel) {
 Lit Solver::pickBranchLit()
 {
     Var next = var_Undef;
-    //    Heap<VarOrderLt>& order_heap = VSIDS ? order_heap_VSIDS : order_heap_CHB;
-    Heap<VarOrderLt>& order_heap = ((!VSIDS)? order_heap_CHB:order_heap_VSIDS);
+    //    Heap<VarOrderLt>& order_heap = VSIDS ? order_heap_VSIDS : order_heap_LRB;
+    // Heap<VarOrderLt>& order_heap = ((!VSIDS)? order_heap_LRB:order_heap_VSIDS);
+    Heap<VarOrderLt>& order_heap = heuristic_num == VSIDS ? order_heap_VSIDS : (heuristic_num == LRB ? order_heap_LRB : order_heap_CHB);
 
     // Random decision:
     /*if (drand(random_seed) < random_var_freq && !order_heap.empty()){
@@ -1144,15 +1146,15 @@ Lit Solver::pickBranchLit()
         else{
 #ifdef ANTI_EXPLORATION
             if (!VSIDS){
-                Var v = order_heap_CHB[0];
+                Var v = order_heap_LRB[0];
                 uint32_t age = conflicts - canceled[v];
                 while (age > 0){
                     double decay = pow(0.95, age);
-                    activity_CHB[v] *= decay;
-                    if (order_heap_CHB.inHeap(v))
-                        order_heap_CHB.increase(v);
+                    activity_LRB[v] *= decay;
+                    if (order_heap_LRB.inHeap(v))
+                        order_heap_LRB.increase(v);
                     canceled[v] = conflicts;
-                    v = order_heap_CHB[0];
+                    v = order_heap_LRB[0];
                     age = conflicts - canceled[v];
                 }
             }
@@ -1274,7 +1276,7 @@ void Solver::analyze(CRef confl, vec<Lit>& out_learnt, int& out_btlevel, int& ou
             Lit q = c[j];
 
             if (!seen[var(q)] && level(var(q)) > 0){
-                if (VSIDS){
+                if (heuristic_num != LRB){
                     varBumpActivity(var(q), .5);
                     add_tmp.push(q);
                 }else
@@ -1356,7 +1358,7 @@ void Solver::analyze(CRef confl, vec<Lit>& out_learnt, int& out_btlevel, int& ou
         out_btlevel       = level(var(p));
     }
 
-    if (VSIDS){
+    if (heuristic_num != LRB){
         for (int i = 0; i < add_tmp.size(); i++){
             Var v = var(add_tmp[i]);
             if (level(v) >= out_btlevel - 1)
@@ -1494,7 +1496,7 @@ void Solver::uncheckedEnqueue(Lit p, int level, CRef from)
 {
     assert(value(p) == l_Undef);
     Var x = var(p);
-    if (!VSIDS){
+    if (heuristic_num == LRB){
         picked[x] = conflicts;
         conflicted[x] = 0;
         almost_conflicted[x] = 0;
@@ -1502,9 +1504,9 @@ void Solver::uncheckedEnqueue(Lit p, int level, CRef from)
         uint32_t age = conflicts - canceled[var(p)];
         if (age > 0){
             double decay = pow(0.95, age);
-            activity_CHB[var(p)] *= decay;
-            if (order_heap_CHB.inHeap(var(p)))
-                order_heap_CHB.increase(var(p));
+            activity_LRB[var(p)] *= decay;
+            if (order_heap_LRB.inHeap(var(p)))
+                order_heap_LRB.increase(var(p));
         }
 #endif
     }
@@ -1735,8 +1737,9 @@ void Solver::rebuildOrderHeap()
         if (decision[v] && value(v) == l_Undef)
             vs.push(v);
 
-    order_heap_CHB  .build(vs);
+    order_heap_LRB  .build(vs);
     order_heap_VSIDS.build(vs);
+    order_heap_CHB  .build(vs);
 }
 
 
@@ -1792,7 +1795,7 @@ void Solver::info_based_rephase(){
     
     for(int i=0;i<lssolver->in_conflict_sz;++i){
         int v = lssolver->in_conflict[i];
-        if(VSIDS){
+        if(heuristic_num == VSIDS){
             varBumpActivity(v-1,lssolver->conflict_ct[v]);
         }else{
             conflicted[v-1] += lssolver->conflict_ct[v];
@@ -1844,13 +1847,13 @@ void Solver::rand_based_rephase(){
 void Solver::updateQ(Var v, double multi) {
     uint32_t age = conflicts - conflicted[v] + 1;
     double adjusted_reward = step_size * multi / age;
-    double old_activity = activity_real_CHB[v];
-    activity_real_CHB[v] = adjusted_reward + ((1 - step_size) * old_activity);
+    double old_activity = activity_CHB[v];
+    activity_CHB[v] = adjusted_reward + ((1 - step_size) * old_activity);
     if (order_heap_CHB.inHeap(v))
-        if (activity_real_CHB[v] > old_activity)
-            order_heap_real_CHB.decrease(v);
+        if (activity_CHB[v] > old_activity)
+            order_heap_CHB.decrease(v);
         else
-            order_heap_real_CHB.increase(v);
+            order_heap_CHB.increase(v);
 }
 
 lbool Solver::search(int& nof_conflicts)
@@ -1907,7 +1910,7 @@ lbool Solver::search(int& nof_conflicts)
 
         if (confl != CRef_Undef){
             // CONFLICT
-            if (VSIDS){
+            if (heuristic_num == VSIDS){
                 if (--timer == 0 && var_decay < 0.95) timer = 5000, var_decay += 0.01;
             }else
                 if (step_size > min_step_size) step_size -= step_size_dec;
@@ -1938,11 +1941,17 @@ lbool Solver::search(int& nof_conflicts)
             action = trail.size();
 
             lbd--;
-            if (VSIDS){
+            if (heuristic_num == VSIDS){
                 cached = false;
                 conflicts_VSIDS++;
-                lbd_queue.push(lbd);
-                global_lbd_sum += (lbd > 50 ? 50 : lbd); }
+                lbd_queue_VSIDS.push(lbd);
+                global_lbd_sum_VSIDS += (lbd > 50 ? 50 : lbd);
+            }else if(heuristic_num == CHB){
+                cached = false;
+                conflicts_CHB++;
+                lbd_queue_CHB.push(lbd);
+                global_lbd_sum_CHB += (lbd > 50 ? 50 : lbd);
+            }
 
             if (learnt_clause.size() == 1){
                 uncheckedEnqueue(learnt_clause[0]);
@@ -1993,7 +2002,7 @@ lbool Solver::search(int& nof_conflicts)
 #endif
             }
 
-            if (VSIDS) varDecayActivity();
+            if (heuristic_num == VSIDS) varDecayActivity();
             claDecayActivity();
 
             /*if (--learntsize_adjust_cnt == 0){
@@ -2044,17 +2053,32 @@ lbool Solver::search(int& nof_conflicts)
             //     }
             // }
 
-            
+
+
 
             bool restart = false;
-            if (!VSIDS)
-                restart = nof_conflicts <= 0;
-            else if (!cached){
-                restart = lbd_queue.full() && (lbd_queue.avg() * 0.8 > global_lbd_sum / conflicts_VSIDS);
-                cached = true;
+//            if (!VSIDS)
+//                restart = nof_conflicts <= 0;
+//            else if (!cached){
+//                restart = lbd_queue.full() && (lbd_queue.avg() * 0.8 > global_lbd_sum / conflicts_VSIDS);
+//                cached = true;
+//            }
+            switch (heuristic_num) {
+                case VSIDS:
+                    restart = lbd_queue_VSIDS.full() && (lbd_queue_VSIDS.avg() * 0.8 > global_lbd_sum_VSIDS / conflicts_VSIDS);
+                    cached = true;
+                    break;
+                case LRB:
+                    restart = nof_conflicts <= 0;
+                    break;
+                default:
+                    restart = lbd_queue_CHB.full() && (lbd_queue_CHB.avg() * 0.8 > global_lbd_sum_CHB / conflicts_CHB);
+                    cached = true;
+                    break;
             }
             if (restart /*|| !withinBudget()*/){
-                lbd_queue.clear();
+                lbd_queue_VSIDS.clear();
+                lbd_queue_CHB.clear();
                 cached = false;
                 // Reached bound on number of conflicts:
                 progress_estimate = progressEstimate();
@@ -2194,11 +2218,11 @@ lbool Solver::solve_()
     }
     for(int i=0;i<nVars();++i) top_trail_soln[i] = ls_best_soln[i];
 
-    VSIDS = true;
+    heuristic_num = VSIDS;
     int init = 10000;
     while (status == l_Undef && init > 0 /*&& withinBudget()*/)
         status = search(init);
-    VSIDS = false;
+    heuristic_num = LRB;
 
     duplicates_added_conflicts = 0;
     duplicates_added_minimization=0;
@@ -2241,7 +2265,7 @@ lbool Solver::solve_()
             dupl_db_size -= removed_duplicates;
             printf("c removed duplicate db entries %i\n",removed_duplicates);
         }        
-        if (VSIDS){
+        if (heuristic_num != LRB){
             int weighted = INT32_MAX;
             status = search(weighted);
         }else{
@@ -2250,10 +2274,10 @@ lbool Solver::solve_()
             status = search(nof_conflicts);
         }
         if(starts-last_switch_conflicts > switch_heristic_mod){
-            if(VSIDS){
-                VSIDS = false;
+            if(heuristic_num == VSIDS){
+                heuristic_num = LRB;
             }else{
-                VSIDS = true;
+                heuristic_num = VSIDS;
 //                 picked.clear();
 //                 conflicted.clear();
 //                 almost_conflicted.clear();
