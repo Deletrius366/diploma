@@ -188,7 +188,8 @@ public:
     double    clause_decay;
     double    random_var_freq;
     double    random_seed;
-    bool      VSIDS;
+    enum      heuristic{VSIDS, LRB, CHB};
+    heuristic heuristic_num;
     int       ccmin_mode;         // Controls conflict clause minimization (0=none, 1=basic, 2=deep).
     int       phase_saving;       // Controls the level of phase saving (0=none, 1=limited, 2=full).
     bool      rnd_pol;            // Use random polarities for branching heuristics.
@@ -214,7 +215,7 @@ public:
 
     // Statistics: (read-only member variable)
     //
-    uint64_t solves, starts, decisions, rnd_decisions, propagations, conflicts, conflicts_VSIDS;
+    uint64_t solves, starts, decisions, rnd_decisions, propagations, conflicts, conflicts_VSIDS, conflicts_CHB;
     uint64_t dec_vars, clauses_literals, learnts_literals, max_literals, tot_literals;
     uint64_t chrono_backtrack, non_chrono_backtrack;
 
@@ -297,14 +298,14 @@ protected:
     int                 simpDB_assigns;   // Number of top-level assignments since last execution of 'simplify()'.
     int64_t             simpDB_props;     // Remaining number of propagations that must be made before next execution of 'simplify()'.
     vec<Lit>            assumptions;      // Current set of assumptions provided to solve by the user.
-    Heap<VarOrderLt>    order_heap_CHB,   // A priority queue of variables ordered with respect to the variable activity.
-    order_heap_VSIDS, order_heap_real_CHB;
+    Heap<VarOrderLt>    order_heap_LRB,   // A priority queue of variables ordered with respect to the variable activity.
+    order_heap_VSIDS, order_heap_CHB;
     double              progress_estimate;// Set by 'search()'.
     bool                remove_satisfied; // Indicates whether possibly inefficient linear scan for satisfied clauses should be performed in 'simplify'.
 
     int                 core_lbd_cut;
-    float               global_lbd_sum;
-    MyQueue<int>        lbd_queue;  // For computing moving averages of recent LBD values.
+    float               global_lbd_sum_VSIDS, global_lbd_sum_CHB;
+    MyQueue<int>        lbd_queue_VSIDS, lbd_queue_CHB;  // For computing moving averages of recent LBD values.
 
     uint64_t            next_T2_reduce,
     next_L_reduce;
@@ -551,8 +552,8 @@ inline CRef Solver::reason(Var x) const { return vardata[x].reason; }
 inline int  Solver::level (Var x) const { return vardata[x].level; }
 
 inline void Solver::insertVarOrder(Var x) {
-    //    Heap<VarOrderLt>& order_heap = VSIDS ? order_heap_VSIDS : order_heap_CHB;
-    Heap<VarOrderLt>& order_heap = ((!VSIDS)? order_heap_CHB:order_heap_VSIDS);
+    //    Heap<VarOrderLt>& order_heap = VSIDS ? order_heap_VSIDS : order_heap_LRB;
+    Heap<VarOrderLt>& order_heap = heuristic_num == VSIDS ? order_heap_VSIDS : (heuristic_num == LRB ? order_heap_LRB : order_heap_CHB);
     if (!order_heap.inHeap(x) && decision[x]) order_heap.insert(x); }
 
 inline void Solver::varDecayActivity() {
@@ -612,7 +613,8 @@ inline void     Solver::setDecisionVar(Var v, bool b)
     else if (!b &&  decision[v]) dec_vars--;
 
     decision[v] = b;
-    if (b && !order_heap_CHB.inHeap(v)){
+    if (b && !order_heap_LRB.inHeap(v)){
+        order_heap_LRB.insert(v);
         order_heap_CHB.insert(v);
         order_heap_VSIDS.insert(v);}
 }
