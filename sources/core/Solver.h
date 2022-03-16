@@ -67,6 +67,11 @@ OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWA
 #define TIER2 2
 #define CORE  3
 
+// Don't change the actual numbers.
+#define VSIDS 0
+#define LRB   1
+#define CHB   2
+
 namespace Minisat {
 
 //=================================================================================================
@@ -188,8 +193,18 @@ public:
     double    clause_decay;
     double    random_var_freq;
     double    random_seed;
-    enum      heuristic{VSIDS, LRB, CHB};
-    heuristic heuristic_num;
+    unsigned  heuristic_num;
+
+    // MAB
+    unsigned mab;
+    unsigned mab_heuristics_count;
+    unsigned mab_decisions;
+    unsigned mab_chosen_tot;
+    vec<unsigned> mab_chosen;
+    vec<unsigned> mab_select;
+    vec<double> mab_reward;
+    double mabc;
+
     int       ccmin_mode;         // Controls conflict clause minimization (0=none, 1=basic, 2=deep).
     int       phase_saving;       // Controls the level of phase saving (0=none, 1=limited, 2=full).
     bool      rnd_pol;            // Use random polarities for branching heuristics.
@@ -283,7 +298,7 @@ protected:
     learnts_local;
     double              cla_inc;          // Amount to bump next clause with.
     vec<double>         activity_CHB,     // A heuristic measurement of the activity of a variable.
-    activity_VSIDS, activity_real_CHB;
+    activity_VSIDS, activity_LRB;
     double              var_inc;          // Amount to bump next variable with.
     OccLists<Lit, vec<Watcher>, WatcherDeleted>
     watches_bin,      // Watches for binary clauses only.
@@ -542,6 +557,7 @@ private:
     void    rand_based_rephase();
     void    info_based_rephase();
     void    updateQ(Var v, double multi);
+    void    restart_mab();
 };
 
 

@@ -1086,13 +1086,13 @@ void Solver::cancelUntil(int bLevel) {
 					uint32_t age = conflicts - picked[x];
 					if (age > 0){
 						double adjusted_reward = ((double) (conflicted[x] + almost_conflicted[x])) / ((double) age);
-						double old_activity = activity_CHB[x];
-						activity_CHB[x] = step_size * adjusted_reward + ((1 - step_size) * old_activity);
-						if (order_heap_CHB.inHeap(x)){
-							if (activity_CHB[x] > old_activity)
-								order_heap_CHB.decrease(x);
+						double old_activity = activity_LRB[x];
+						activity_LRB[x] = step_size * adjusted_reward + ((1 - step_size) * old_activity);
+						if (order_heap_LRB.inHeap(x)){
+							if (activity_LRB[x] > old_activity)
+								order_heap_LRB.decrease(x);
 							else
-								order_heap_CHB.increase(x);
+								order_heap_LRB.increase(x);
 						}
 					}
 #ifdef ANTI_EXPLORATION
@@ -1161,7 +1161,14 @@ Lit Solver::pickBranchLit()
 #endif
             next = order_heap.removeMin();
         }
-    
+
+    if(mab) {
+        mab_decisions++;
+        if(!mab_chosen[next]){
+            mab_chosen_tot++;
+            mab_chosen[next] = 1;
+        }
+    }
     return mkLit(next, polarity[next]);
     
     
@@ -2178,6 +2185,26 @@ static double luby(double y, int x){
 
 static bool switch_mode = false;
 static void SIGALRM_switch(int signum) { switch_mode = true; }
+
+void Solver::restart_mab(){
+    unsigned stable_restarts = 0;
+    mab_reward[heuristic_num] += !mab_chosen_tot?0:log2(mab_decisions)/mab_chosen_tot;
+    for (unsigned idx=0;idx<activity_VSIDS.size();idx++) mab_chosen[idx]=0;
+    mab_chosen_tot = 0;
+    mab_decisions = 0;
+    for(unsigned i=0;i<mab_heuristics_count;i++) stable_restarts +=  mab_select[i];
+    if(stable_restarts < mab_heuristics_count) {
+        heuristic_num = heuristic_num==0?1:0;
+    }else{
+        double ucb[3];
+        heuristic_num = 0;
+        for(unsigned i=0;i<mab_heuristics_count;i++) {
+            ucb[i] = mab_reward[i]/mab_select[i] + sqrt(mabc*log(stable_restarts+1)/mab_select[i]);
+            if(i!=0 && ucb[i]>ucb[heuristic_num]) heuristic_num = i;
+        }
+    }
+    mab_select[heuristic_num]++;
+}
 
 // NOTE: assumptions passed in member-variable 'assumptions'.
 lbool Solver::solve_()
