@@ -75,6 +75,7 @@ static IntOption     opt_max_lbd_dup       ("DUP-LEARNTS", "lbd-limit",  "specif
 static IntOption     opt_min_dupl_app      ("DUP-LEARNTS", "min-dup-app",  "specifies the minimum number of learnts to be included into db.", 2, IntRange(2, INT32_MAX));
 static IntOption     opt_dupl_db_init_size ("DUP-LEARNTS", "dupdb-init",  "specifies the initial maximal duplicates DB size.", 1000000, IntRange(1, INT32_MAX));
 
+static IntOption     opt_mab               ("MAB", "mab", "enable MAB restarts", 0, IntRange(0, 1));
 
 //=================================================================================================
 // Constructor/Destructor:
@@ -132,7 +133,7 @@ Solver::Solver() :
   , simpDB_props       (0)
   , order_heap_LRB     (VarOrderLt(activity_LRB))
   , order_heap_VSIDS   (VarOrderLt(activity_VSIDS))
-  , order_heap_CHB(VarOrderLt(activity_CHB))
+  , order_heap_CHB     (VarOrderLt(activity_CHB))
   , progress_estimate  (0)
   , remove_satisfied   (true)
   
@@ -164,6 +165,13 @@ Solver::Solver() :
   , curSimplify(1)
   , nbconfbeforesimplify(1000)
   , incSimplify(1000)
+
+  // MAB
+  , mab                  (opt_mab)
+  , mab_heuristics_count (3)
+  , mab_decisions        (0)
+  , mab_chosen_tot       (0)
+  , mabc                 (4)
 
 {}
 
@@ -932,6 +940,10 @@ Var Solver::newVar(bool sign, bool dvar)
     activity_CHB  .push(0);
     activity_VSIDS.push(rnd_init_act ? drand(random_seed) * 0.00001 : 0);
 
+    mab_chosen.push(0);
+    mab_select.push(0);
+    mab_reward.push(0);
+
     picked.push(0);
     conflicted.push(0);
     almost_conflicted.push(0);
@@ -1170,8 +1182,7 @@ Lit Solver::pickBranchLit()
         }
     }
     return mkLit(next, polarity[next]);
-    
-    
+
 }
 
 inline Solver::ConflictData Solver::FindConflictLevel(CRef cind)
