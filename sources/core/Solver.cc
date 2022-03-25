@@ -2205,7 +2205,7 @@ void Solver::restart_mab(){
     mab_decisions = 0;
     for(unsigned i=0;i<mab_heuristics_count;i++) stable_restarts +=  mab_select[i];
     if(stable_restarts < mab_heuristics_count) {
-        heuristic_num = heuristic_num==0?1:0;
+        heuristic_num = (heuristic_num + 1) % mab_heuristics_count;
     }else{
         double ucb[3];
         heuristic_num = 0;
@@ -2312,10 +2312,11 @@ lbool Solver::solve_()
             status = search(nof_conflicts);
         }
         if(starts-last_switch_conflicts > switch_heristic_mod){
-            if(heuristic_num == VSIDS){
-                heuristic_num = LRB;
-            }else{
-                heuristic_num = VSIDS;
+            restart_mab();
+//            if(heuristic_num == VSIDS){
+//                heuristic_num = LRB;
+//            }else{
+//                heuristic_num = VSIDS;
 //                 picked.clear();
 //                 conflicted.clear();
 //                 almost_conflicted.clear();
