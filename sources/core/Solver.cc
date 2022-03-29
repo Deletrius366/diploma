@@ -2323,7 +2323,7 @@ lbool Solver::solve_()
 // #ifdef ANTI_EXPLORATION
 //                 canceled.clear();
 // #endif
-            }
+//            }
             last_switch_conflicts = starts;
 //            cout<<"c Swith"<<VSIDS<<endl;
         }
