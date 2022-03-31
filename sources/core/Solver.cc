@@ -1157,7 +1157,7 @@ Lit Solver::pickBranchLit()
             return lit_Undef;
         else{
 #ifdef ANTI_EXPLORATION
-            if (!VSIDS){
+            if (heuristic_num == LRB){
                 Var v = order_heap_LRB[0];
                 uint32_t age = conflicts - canceled[v];
                 while (age > 0){
@@ -2081,18 +2081,14 @@ lbool Solver::search(int& nof_conflicts)
 //                restart = lbd_queue.full() && (lbd_queue.avg() * 0.8 > global_lbd_sum / conflicts_VSIDS);
 //                cached = true;
 //            }
-            switch (heuristic_num) {
-                case VSIDS:
+            if (heuristic_num == LRB)
+                restart = nof_conflicts <= 0;
+            else if (!cached){
+                if (heuristic_num == VSIDS)
                     restart = lbd_queue_VSIDS.full() && (lbd_queue_VSIDS.avg() * 0.8 > global_lbd_sum_VSIDS / conflicts_VSIDS);
-                    cached = true;
-                    break;
-                case LRB:
-                    restart = nof_conflicts <= 0;
-                    break;
-                default:
+                else
                     restart = lbd_queue_CHB.full() && (lbd_queue_CHB.avg() * 0.8 > global_lbd_sum_CHB / conflicts_CHB);
-                    cached = true;
-                    break;
+                cached = true;
             }
             if (restart /*|| !withinBudget()*/){
                 lbd_queue_VSIDS.clear();
@@ -2312,18 +2308,18 @@ lbool Solver::solve_()
             status = search(nof_conflicts);
         }
         if(starts-last_switch_conflicts > switch_heristic_mod){
-            restart_mab();
-//            if(heuristic_num == VSIDS){
-//                heuristic_num = LRB;
-//            }else{
-//                heuristic_num = VSIDS;
+//            restart_mab();
+            if(heuristic_num == VSIDS){
+                heuristic_num = LRB;
+            }else{
+                heuristic_num = VSIDS;
 //                 picked.clear();
 //                 conflicted.clear();
 //                 almost_conflicted.clear();
 // #ifdef ANTI_EXPLORATION
 //                 canceled.clear();
 // #endif
-//            }
+            }
             last_switch_conflicts = starts;
 //            cout<<"c Swith"<<VSIDS<<endl;
         }
