@@ -60,6 +60,10 @@ void printStats(Solver& solver)
     printf("c backtracks            : %-12"PRIu64"   (NCB %0.f%% , CB %0.f%%)\n", solver.non_chrono_backtrack + solver.chrono_backtrack, (solver.non_chrono_backtrack * 100) / (double)(solver.non_chrono_backtrack + solver.chrono_backtrack), (solver.chrono_backtrack * 100) / (double)(solver.non_chrono_backtrack + solver.chrono_backtrack));
     if (mem_used != 0) printf("c Memory used           : %.2f MB\n", mem_used);
     printf("c CPU time              : %g s\n", cpu_time);
+    printf("c VSIDS count           : %d\n", solver.VSIDS_count);
+    printf("c LRB count             : %d\n", solver.LRB_count);
+    printf("c CHB count             : %d\n", solver.CHB_count);
+    printf("c VMTF count            : %d\n", solver.VMTF_count);
 }
 
 

@@ -50,6 +50,8 @@ OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWA
 #include "utils/Options.h"
 #include "core/SolverTypes.h"
 #include "utils/ccnr.h"
+#include "vector"
+#include "list"
 
 // duplicate learnts version
 #include <chrono>
@@ -71,6 +73,7 @@ OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWA
 #define VSIDS 0
 #define LRB   1
 #define CHB   2
+#define VMTF  3
 
 namespace Minisat {
 
@@ -204,6 +207,16 @@ public:
     vec<unsigned> mab_select;
     vec<double> mab_reward;
     double mabc;
+
+    // VMTF
+    int vmtf_max_to_move;
+    std::list<Var> vmtf_order;
+    std::vector<std::list<int>::iterator> vmtf_ptr;
+
+    unsigned VSIDS_count;
+    unsigned LRB_count;
+    unsigned CHB_count;
+    unsigned VMTF_count;
 
     int       ccmin_mode;         // Controls conflict clause minimization (0=none, 1=basic, 2=deep).
     int       phase_saving;       // Controls the level of phase saving (0=none, 1=limited, 2=full).
@@ -521,7 +534,7 @@ private:
     //  whether the mediation_soln is used as rephase, if not 
     // bool    mediation_used      = false;
     
-    int     switch_heristic_mod = 500;//starts
+    int     switch_heristic_mod = 50;//starts
     int     last_switch_conflicts;
 
     //informations 
@@ -558,6 +571,7 @@ private:
     void    info_based_rephase();
     void    updateQ(Var v, double multi);
     void    restart_mab();
+    void    move_to_front(Var v);
 };
 
 

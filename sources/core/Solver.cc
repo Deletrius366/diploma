@@ -75,7 +75,7 @@ static IntOption     opt_max_lbd_dup       ("DUP-LEARNTS", "lbd-limit",  "specif
 static IntOption     opt_min_dupl_app      ("DUP-LEARNTS", "min-dup-app",  "specifies the minimum number of learnts to be included into db.", 2, IntRange(2, INT32_MAX));
 static IntOption     opt_dupl_db_init_size ("DUP-LEARNTS", "dupdb-init",  "specifies the initial maximal duplicates DB size.", 1000000, IntRange(1, INT32_MAX));
 
-static IntOption     opt_mab               ("MAB", "mab", "enable MAB restarts", 0, IntRange(0, 1));
+static IntOption     opt_mab               ("MAB", "mab", "enable MAB restarts", 1, IntRange(0, 1));
 
 //=================================================================================================
 // Constructor/Destructor:
@@ -168,10 +168,17 @@ Solver::Solver() :
 
   // MAB
   , mab                  (opt_mab)
-  , mab_heuristics_count (3)
+  , mab_heuristics_count (4)
   , mab_decisions        (0)
   , mab_chosen_tot       (0)
   , mabc                 (4)
+
+  , vmtf_max_to_move     (8)
+
+  , VSIDS_count          (0)
+  , LRB_count            (0)
+  , CHB_count            (0)
+  , VMTF_count           (0)
 
 {}
 
@@ -939,10 +946,10 @@ Var Solver::newVar(bool sign, bool dvar)
     activity_LRB  .push(0);
     activity_CHB  .push(0);
     activity_VSIDS.push(rnd_init_act ? drand(random_seed) * 0.00001 : 0);
+    vmtf_order.push_front(v);
+    vmtf_ptr.push_back(vmtf_order.begin());
 
     mab_chosen.push(0);
-    mab_select.push(0);
-    mab_reward.push(0);
 
     picked.push(0);
     conflicted.push(0);
@@ -1152,12 +1159,13 @@ Lit Solver::pickBranchLit()
             rnd_decisions++; }*/
 
     // Activity based decision:
-    while (next == var_Undef || value(next) != l_Undef || !decision[next])
-        if (order_heap.empty())
-            return lit_Undef;
-        else{
+    if (heuristic_num != VMTF) {
+        while (next == var_Undef || value(next) != l_Undef || !decision[next])
+            if (order_heap.empty())
+                return lit_Undef;
+            else{
 #ifdef ANTI_EXPLORATION
-            if (heuristic_num == LRB){
+                if (heuristic_num == LRB){
                 Var v = order_heap_LRB[0];
                 uint32_t age = conflicts - canceled[v];
                 while (age > 0){
@@ -1171,8 +1179,24 @@ Lit Solver::pickBranchLit()
                 }
             }
 #endif
-            next = order_heap.removeMin();
+                next = order_heap.removeMin();
+            }
+    } else {
+        auto it = vmtf_order.begin();
+        next = *it;
+        while (next == var_Undef || value(next) != l_Undef || !decision[next]) {
+            if (it == vmtf_order.end()) {
+//                for (auto i : vmtf_order) {
+//                    printf("%d ", i);
+//                }
+//                printf("\n");
+                return lit_Undef;
+            } else {
+                it++;
+                next = *it;
+            }
         }
+    }
 
     if(mab) {
         mab_decisions++;
@@ -1226,6 +1250,13 @@ inline Solver::ConflictData Solver::FindConflictLevel(CRef cind)
 	}
 
 	return data;
+}
+
+void Solver::move_to_front(Var var) {
+    auto del_it = vmtf_ptr[var];
+    vmtf_order.erase(del_it);
+    vmtf_order.push_front(var);
+    vmtf_ptr[var] = vmtf_order.begin();
 }
 
 
@@ -1376,14 +1407,20 @@ void Solver::analyze(CRef confl, vec<Lit>& out_learnt, int& out_btlevel, int& ou
         out_btlevel       = level(var(p));
     }
 
-    if (heuristic_num != LRB){
+    if (heuristic_num == VSIDS || heuristic_num == CHB){
         for (int i = 0; i < add_tmp.size(); i++){
             Var v = var(add_tmp[i]);
             if (level(v) >= out_btlevel - 1)
                 varBumpActivity(v, 1);
         }
         add_tmp.clear();
-    }else{
+    }else if (heuristic_num == VMTF) {
+        int lower_ind = std::max(0, out_learnt.size() - vmtf_max_to_move);
+        for(int i = out_learnt.size() - 1; i >= lower_ind; i--) {
+            Var v = var(out_learnt[i]);
+            move_to_front(v);
+        }
+    }else {
         seen[var(p)] = true;
         for(int i = out_learnt.size() - 1; i >= 0; i--){
             Var v = var(out_learnt[i]);
@@ -1930,8 +1967,9 @@ lbool Solver::search(int& nof_conflicts)
             // CONFLICT
             if (heuristic_num == VSIDS){
                 if (--timer == 0 && var_decay < 0.95) timer = 5000, var_decay += 0.01;
-            }else
+            }else if (heuristic_num == CHB || heuristic_num == LRB) {
                 if (step_size > min_step_size) step_size -= step_size_dec;
+            }
 
             conflicts++; nof_conflicts--;
             //if (conflicts == 100000 && learnts_core.size() < 100) core_lbd_cut = 5;
@@ -2081,12 +2119,15 @@ lbool Solver::search(int& nof_conflicts)
 //                restart = lbd_queue.full() && (lbd_queue.avg() * 0.8 > global_lbd_sum / conflicts_VSIDS);
 //                cached = true;
 //            }
-            if (heuristic_num == LRB)
+            if (heuristic_num == LRB || heuristic_num == VMTF){
                 restart = nof_conflicts <= 0;
+//                if (heuristic_num == VMTF)
+//                    printf("nof_conflicts = %d\n", nof_conflicts);
+            }
             else if (!cached){
                 if (heuristic_num == VSIDS)
                     restart = lbd_queue_VSIDS.full() && (lbd_queue_VSIDS.avg() * 0.8 > global_lbd_sum_VSIDS / conflicts_VSIDS);
-                else
+                else if (heuristic_num == CHB)
                     restart = lbd_queue_CHB.full() && (lbd_queue_CHB.avg() * 0.8 > global_lbd_sum_CHB / conflicts_CHB);
                 cached = true;
             }
@@ -2193,23 +2234,47 @@ static double luby(double y, int x){
 static bool switch_mode = false;
 static void SIGALRM_switch(int signum) { switch_mode = true; }
 
-void Solver::restart_mab(){
+void Solver::restart_mab() {
+    if (mab_select.size() == 0)
+        for (unsigned i = 0; i < mab_heuristics_count; i++) {
+            mab_select.push(0);
+            mab_reward.push(0);
+        }
     unsigned stable_restarts = 0;
-    mab_reward[heuristic_num] += !mab_chosen_tot?0:log2(mab_decisions)/mab_chosen_tot;
-    for (unsigned idx=0;idx<activity_VSIDS.size();idx++) mab_chosen[idx]=0;
+    printf("mab_reward[%d] = %f\n", heuristic_num, !mab_chosen_tot ? 0 : log2(mab_decisions) / mab_chosen_tot);
+    printf("mab_chosen_tot = %d, mab_decisions = %d, mab = %d\n", mab_chosen_tot, mab_decisions, mab);
+    mab_reward[heuristic_num] += !mab_chosen_tot ? 0 : log2(mab_decisions) / mab_chosen_tot;
+    for (unsigned idx = 0; idx < activity_VSIDS.size(); idx++) mab_chosen[idx] = 0;
     mab_chosen_tot = 0;
     mab_decisions = 0;
-    for(unsigned i=0;i<mab_heuristics_count;i++) stable_restarts +=  mab_select[i];
-    if(stable_restarts < mab_heuristics_count) {
+    for (unsigned i = 0; i < mab_heuristics_count; i++) stable_restarts += mab_select[i];
+    if (stable_restarts < mab_heuristics_count) {
         heuristic_num = (heuristic_num + 1) % mab_heuristics_count;
-    }else{
-        double ucb[3];
+        printf("mab_select now: ");
+        for (unsigned i = 0; i < mab_heuristics_count; i++)
+            printf("%d ", mab_select[i]);
+        printf("\n");
+    } else {
+        double ucb[4];
         heuristic_num = 0;
-        for(unsigned i=0;i<mab_heuristics_count;i++) {
-            ucb[i] = mab_reward[i]/mab_select[i] + sqrt(mabc*log(stable_restarts+1)/mab_select[i]);
-            if(i!=0 && ucb[i]>ucb[heuristic_num]) heuristic_num = i;
+        for (unsigned i = 0; i < mab_heuristics_count; i++) {
+            ucb[i] = mab_reward[i] / mab_select[i] + sqrt(mabc * log(stable_restarts + 1) / mab_select[i]);
+            printf("ucb[%d] = %f / %d + %f = %f\n", i, mab_reward[i], mab_select[i], sqrt(mabc * log(stable_restarts + 1) / mab_select[i]), ucb[i]);
+            // ucb[i] = mab_reward[i]/mab_select[i] + sqrt(mabc*log(std::max(1.0, (stable_restarts+1.0) / (mab_heuristics_count * mab_select[i])))/mab_select[i]);
+            if (i != 0 && ucb[i] > ucb[heuristic_num]) heuristic_num = i;
         }
+//        for (unsigned i = 0; i < mab_heuristics_count; i++)
+//            printf("ucb[%d] = %f, ", i, ucb[i]);
+//        printf("\n");
     }
+    if (heuristic_num == 0)
+        VSIDS_count++;
+    else if (heuristic_num == 1)
+        LRB_count++;
+    else if (heuristic_num == 2)
+        CHB_count++;
+    else
+        VMTF_count++;
     mab_select[heuristic_num]++;
 }
 
@@ -2251,12 +2316,12 @@ lbool Solver::solve_()
         status = l_True;
     }
     for(int i=0;i<nVars();++i) top_trail_soln[i] = ls_best_soln[i];
-
     heuristic_num = VSIDS;
     int init = 10000;
     while (status == l_Undef && init > 0 /*&& withinBudget()*/)
         status = search(init);
-    heuristic_num = LRB;
+    restart_mab();
+    // heuristic_num = VMTF;
 
     duplicates_added_conflicts = 0;
     duplicates_added_minimization=0;
@@ -2299,7 +2364,7 @@ lbool Solver::solve_()
             dupl_db_size -= removed_duplicates;
             printf("c removed duplicate db entries %i\n",removed_duplicates);
         }        
-        if (heuristic_num != LRB){
+        if (heuristic_num != LRB && heuristic_num != VMTF){
             int weighted = INT32_MAX;
             status = search(weighted);
         }else{
@@ -2307,19 +2372,21 @@ lbool Solver::solve_()
             curr_restarts++;
             status = search(nof_conflicts);
         }
+        // printf("Before maybe restarting: start = %d, last_switch_conflicts = %d, switch_mod = %d\n", starts, last_switch_conflicts, switch_heristic_mod);
         if(starts-last_switch_conflicts > switch_heristic_mod){
-//            restart_mab();
-            if(heuristic_num == VSIDS){
-                heuristic_num = LRB;
-            }else{
-                heuristic_num = VSIDS;
+            // printf("Restart using MAB\n");
+            restart_mab();
+//            if(heuristic_num == VSIDS){
+//                heuristic_num = LRB;
+//            }else{
+//                heuristic_num = VSIDS;
 //                 picked.clear();
 //                 conflicted.clear();
-//                 almost_conflicted.clear();
+//                 almost_conflicted.clear();re
 // #ifdef ANTI_EXPLORATION
 //                 canceled.clear();
 // #endif
-            }
+//            }
             last_switch_conflicts = starts;
 //            cout<<"c Swith"<<VSIDS<<endl;
         }
