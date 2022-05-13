@@ -212,6 +212,9 @@ public:
     int vmtf_max_to_move;
     std::list<Var> vmtf_order;
     std::vector<std::list<int>::iterator> vmtf_ptr;
+    std::list<int>::iterator last_unassigned;
+    std::vector<int> vmtf_enqueue_score;
+    int vmtf_global_enqueue_counter;
 
     unsigned VSIDS_count;
     unsigned LRB_count;

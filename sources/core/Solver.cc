@@ -168,7 +168,7 @@ Solver::Solver() :
 
   // MAB
   , mab                  (opt_mab)
-  , mab_heuristics_count (4)
+  , mab_heuristics_count (2)
   , mab_decisions        (0)
   , mab_chosen_tot       (0)
   , mabc                 (4)
@@ -947,6 +947,9 @@ Var Solver::newVar(bool sign, bool dvar)
     activity_CHB  .push(0);
     activity_VSIDS.push(rnd_init_act ? drand(random_seed) * 0.00001 : 0);
     vmtf_order.push_front(v);
+    vmtf_enqueue_score.push_back(vmtf_global_enqueue_counter);
+    vmtf_global_enqueue_counter++;
+    last_unassigned = vmtf_order.begin();
     vmtf_ptr.push_back(vmtf_order.begin());
 
     mab_chosen.push(0);
@@ -1127,6 +1130,8 @@ void Solver::cancelUntil(int bLevel) {
 					polarity[x] = sign(trail[c]);
                 }
 				insertVarOrder(x);
+	            if (vmtf_enqueue_score[x] < vmtf_global_enqueue_counter)
+                    last_unassigned = vmtf_ptr[x];
 			}
         }
         qhead = trail_lim[bLevel];
@@ -1182,8 +1187,15 @@ Lit Solver::pickBranchLit()
                 next = order_heap.removeMin();
             }
     } else {
-        auto it = vmtf_order.begin();
+        auto it = last_unassigned;
+        printf("Checking vars before: \n");
+        auto it1 = vmtf_order.begin();
+        for (auto it1 = vmtf_order.begin(); it1 != last_unassigned; it1++) {
+            next = *it1;
+            printf("Var %d, %s\n", next, (next == var_Undef || value(next) != l_Undef || !decision[next]) ? "true" : "false");
+        }
         next = *it;
+        printf("first picked var: %d\n", next);
         while (next == var_Undef || value(next) != l_Undef || !decision[next]) {
             if (it == vmtf_order.end()) {
 //                for (auto i : vmtf_order) {
@@ -1196,6 +1208,7 @@ Lit Solver::pickBranchLit()
                 next = *it;
             }
         }
+        printf("picked var: %d\n", next);
     }
 
     if(mab) {
@@ -1256,6 +1269,9 @@ void Solver::move_to_front(Var var) {
     auto del_it = vmtf_ptr[var];
     vmtf_order.erase(del_it);
     vmtf_order.push_front(var);
+    vmtf_enqueue_score[var] = vmtf_global_enqueue_counter;
+    vmtf_global_enqueue_counter++;
+    last_unassigned = vmtf_order.begin();
     vmtf_ptr[var] = vmtf_order.begin();
 }
 
@@ -1415,10 +1431,12 @@ void Solver::analyze(CRef confl, vec<Lit>& out_learnt, int& out_btlevel, int& ou
         }
         add_tmp.clear();
     }else if (heuristic_num == VMTF) {
-        int lower_ind = std::max(0, out_learnt.size() - vmtf_max_to_move);
-        for(int i = out_learnt.size() - 1; i >= lower_ind; i--) {
-            Var v = var(out_learnt[i]);
+        int lower_ind = std::max(0, add_tmp.size() - vmtf_max_to_move);
+        for(int i = add_tmp.size() - 1; i >= lower_ind; i--) {
+            Var v = var(add_tmp[i]);
             move_to_front(v);
+            if (i == lower_ind)
+                printf("mtfed var: %d\n", v);
         }
     }else {
         seen[var(p)] = true;
@@ -2255,12 +2273,16 @@ void Solver::restart_mab() {
             printf("%d ", mab_select[i]);
         printf("\n");
     } else {
-        double ucb[4];
+        double ucb[2];
         heuristic_num = 0;
         for (unsigned i = 0; i < mab_heuristics_count; i++) {
+            // UCB1
             ucb[i] = mab_reward[i] / mab_select[i] + sqrt(mabc * log(stable_restarts + 1) / mab_select[i]);
             printf("ucb[%d] = %f / %d + %f = %f\n", i, mab_reward[i], mab_select[i], sqrt(mabc * log(stable_restarts + 1) / mab_select[i]), ucb[i]);
-            // ucb[i] = mab_reward[i]/mab_select[i] + sqrt(mabc*log(std::max(1.0, (stable_restarts+1.0) / (mab_heuristics_count * mab_select[i])))/mab_select[i]);
+            // MOSS
+            //ucb[i] = mab_reward[i] / mab_select[i] + sqrt(mabc*log(std::max(1.0, (stable_restarts+1.0) / (mab_heuristics_count * mab_select[i])))/mab_select[i]);
+            //printf("moss[%d] = %f / %d + %f = %f\n", i, mab_reward[i], mab_select[i],
+//                    sqrt(mabc*log(std::max(1.0, (stable_restarts+1.0) / (mab_heuristics_count * mab_select[i])))/mab_select[i]), ucb[i]);
             if (i != 0 && ucb[i] > ucb[heuristic_num]) heuristic_num = i;
         }
 //        for (unsigned i = 0; i < mab_heuristics_count; i++)
